@@ -4,10 +4,10 @@
 # DeepSpeed Team
 
 import torch
+import deepspeed
+from deepspeed.pydantic_v1 import Field, validator
 from deepspeed.runtime.config_utils import DeepSpeedConfigModel
 from deepspeed.runtime.zero.config import DeepSpeedZeroConfig
-from pydantic import Field
-from pydantic import validator
 from typing import Dict, Union
 from enum import Enum
 
@@ -99,6 +99,8 @@ class BaseQuantConfig(DeepSpeedConfigModel):
 
 class WeightQuantConfig(BaseQuantConfig):
     enabled = True
+    quantized_initialization: Dict = {}
+    post_init_quant: Dict = {}
 
 
 class ActivationQuantConfig(BaseQuantConfig):
@@ -152,6 +154,18 @@ class DeepSpeedInferenceConfig(DeepSpeedConfigModel):
     can run faster using the graph replay method.
     """
 
+    use_triton: bool = False
+    """
+    Use this flag to use triton kernels for inference ops.
+    """
+
+    triton_autotune: bool = False
+    """
+    Use this flag to enable triton autotuning.
+    Turning it on is better for performance but increase the 1st runtime for
+    autotuning.
+    """
+
     zero: DeepSpeedZeroConfig = {}
     """
     ZeRO configuration to use with the Inference Engine. Expects a dictionary
@@ -184,12 +198,12 @@ class DeepSpeedInferenceConfig(DeepSpeedConfigModel):
     """
 
     #todo: refactor the following 3 into the new checkpoint_config
-    checkpoint: str = None
+    checkpoint: Union[str, Dict] = None
     """
     Path to deepspeed compatible checkpoint or path to JSON with load policy.
     """
 
-    base_dir: str = None
+    base_dir: str = ""
     """
     This shows the root directory under which all the checkpoint files exists.
     This can be passed through the json config too.
@@ -277,6 +291,12 @@ class DeepSpeedInferenceConfig(DeepSpeedConfigModel):
     def moe_backward_compat(cls, field_value, values):
         if isinstance(field_value, bool):
             return DeepSpeedMoEConfig(moe=field_value)
+        return field_value
+
+    @validator("use_triton")
+    def has_triton(cls, field_value, values):
+        if field_value and not deepspeed.HAS_TRITON:
+            raise ValueError('Triton needs to be installed to use deepspeed with triton kernels')
         return field_value
 
     class Config:

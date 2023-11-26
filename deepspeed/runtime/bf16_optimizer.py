@@ -7,9 +7,9 @@ from collections import OrderedDict
 import torch
 import sys
 import os
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from deepspeed import comm as dist
 from deepspeed.runtime.constants import PIPE_REPLICATED
-from deepspeed.ops.op_builder import UtilsBuilder
 from deepspeed.runtime import ZeROOptimizer
 from packaging import version as pkg_version
 
@@ -53,10 +53,9 @@ class BF16_Optimizer(ZeROOptimizer):
         self.dp_rank = dist.get_rank(group=self.dp_process_group)
         self.real_dp_process_group = [dp_process_group for i in range(len(self.optimizer.param_groups))]
 
-        # Load pre-built or JIT compile (un)flatten ops
-        util_ops = UtilsBuilder().load()
-        self.flatten = util_ops.flatten
-        self.unflatten = util_ops.unflatten
+        # Use torch (un)flatten ops
+        self.flatten = _flatten_dense_tensors
+        self.unflatten = _unflatten_dense_tensors
 
         #align nccl all-gather send buffers to 4-bye boundary
         self.nccl_start_alignment_factor = 2  # 4-byte alignment/sizeof(fp16) = 2
@@ -76,7 +75,6 @@ class BF16_Optimizer(ZeROOptimizer):
         self.fp32_groups_gradient_flat_partition = []
         self.fp32_groups_has_gradients = []
 
-        self.step_count = 0
         self.group_paddings = []
 
         if self.using_real_optimizer:
@@ -253,7 +251,6 @@ class BF16_Optimizer(ZeROOptimizer):
         self.update_lp_params()
 
         self.clear_hp_grads()
-        self.step_count += 1
 
     def backward(self, loss, update_hp_grads=True, clear_lp_grads=False, **bwd_kwargs):
         """Perform a backward pass and copy the low-precision gradients to the
@@ -366,7 +363,8 @@ class BF16_Optimizer(ZeROOptimizer):
                         state_dict_list,
                         checkpoint_folder,
                         load_optimizer_states=True,
-                        load_from_fp32_weights=False):
+                        load_from_fp32_weights=False,
+                        load_serial=None):
         if checkpoint_folder:
             self._load_universal_checkpoint(checkpoint_folder, load_optimizer_states, load_from_fp32_weights)
         else:

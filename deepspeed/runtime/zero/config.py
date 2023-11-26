@@ -3,10 +3,10 @@
 
 # DeepSpeed Team
 
-from pydantic import Field, validator
 import sys
 from typing import Optional
 from enum import Enum
+from deepspeed.pydantic_v1 import Field, validator, root_validator
 from deepspeed.runtime.config_utils import get_scalar_param, pp_int, DeepSpeedConfigModel
 from deepspeed.utils import logger
 from .offload_config import DeepSpeedZeroOffloadParamConfig, DeepSpeedZeroOffloadOptimizerConfig, OffloadDeviceEnum
@@ -21,6 +21,7 @@ ZeRO optimization should be enabled as:
     "stage3_max_live_parameters" : 1000000000,
     "stage3_max_reuse_distance" : 1000000000,
     "allgather_partitions": [true|false],
+    "use_multi_rank_bucket_allreduce": [true|false],
     "allgather_bucket_size": 500000000,
     "reduce_scatter": [true|false],
     "contiguous_gradients" : [true|false]
@@ -35,7 +36,12 @@ ZeRO optimization should be enabled as:
     "offload_optimizer": {...},
     "ignore_unused_parameters": [true|false],
     "round_robin_gradients": [true|false],
-    "memory_efficient_linear": [true|false]
+    "zero_hpz_partition_size": 1,
+    "zero_quantized_weights": [true|false],
+    "zero_quantized_nontrainable_weights": [true|false],
+    "zero_quantized_gradients": [true|false],
+    "memory_efficient_linear": [true|false],
+    "override_module_apply": [true|false],
     }
 }
 """
@@ -100,6 +106,13 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     """
     Number of elements reduced/allreduced at a time. Limits the memory required
     for the allgather for large model sizes
+    """
+
+    use_multi_rank_bucket_allreduce: bool = True
+    """
+    Combine the reduce buckets of the different ranks and do an All-Reduce instead of multiple Reduce ops.
+    This feature is useful when the model is small and we want to scale it on too many GPUs which therefore
+    reduces the message sizes of each packet.
     """
 
     allgather_partitions: bool = True
@@ -231,7 +244,7 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     Unused parameters in modules may be unexpected in static networks, but
     could be normal in dynamic networks. This controls whether or not training
     should terminate with an error message when unused parameters are detected.
-    This is set to ``False`` by default, which means unused parameters are
+    This is set to ``True`` by default, which means unused parameters are
     ignored and training continues. Now is just used in stage 2.
     """
 
@@ -248,13 +261,44 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     Performance benefit grows with gradient accumulation steps (more copying
     between optimizer steps) or GPU count (increased parallelism).
     """
+    zero_hpz_partition_size: int = Field(1, ge=0)
+    """
+    Number of ranks in zero parameters partitioning secondary group
+    """
+    zero_quantized_weights: bool = False
+    """
+    Boolean indicating whether to quantize zero parameters (weights)
+    for efficient all_gather comm
+    """
+    zero_quantized_nontrainable_weights: bool = False
+    """
+    Boolean indicating whether to quantize non-trainable zero parameters (weights)
+    for efficient memory usage and communication. Different from zero_quantized_weights
+    that stores the weights in original precision and only perform quantization during communication,
+    this flag will store the weights in quantized precision. This is useful for LoRA training.
+    """
+    zero_quantized_gradients: bool = False
+    """
+    Boolean indicating whether to use quantized zero gradients
+    for efficient all_2_all_reduce comm
+    """
 
     mics_shard_size: int = Field(-1, new_param="mics_shard_size")
 
     mics_hierarchical_params_gather: bool = False
+
     memory_efficient_linear: bool = True
     """
     Use memory efficient linear implementation, for Stage 3.
+    """
+    """
+    Whether force load checkpoint in pipeline mode, current only for Stage 3.
+    """
+    pipeline_loading_checkpoint: bool = False
+
+    override_module_apply: bool = True
+    """
+    Override nn.Module apply function, for Stage 3.
     """
 
     # Validators
@@ -264,3 +308,10 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
             assert ("stage" in values), "DeepSpeedZeroConfig: 'stage' must be defined before 'overlap_comm'"
             field_value = values["stage"] == ZeroStageEnum.weights
         return field_value
+
+    @root_validator
+    def offload_ratio_check(cls, values):
+        offload_config = getattr(values, "offload_optimizer", {})
+        if offload_config and offload_config.ratio < 1.0:
+            assert values.get("stage") == ZeroStageEnum.weights, "Partial offloading only supported for ZeRO Stage 3."
+        return values

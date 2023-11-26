@@ -28,6 +28,7 @@ from deepspeed.utils import logger
 INITIAL_LOSS_SCALE = 'init_scale'
 SCALE_WINDOW = 'scale_window'
 DELAYED_SHIFT = 'delayed_shift'
+CONSECUTIVE_HYSTERESIS = 'consecutive_hysteresis'
 MIN_LOSS_SCALE = 'min_scale'
 
 
@@ -191,8 +192,9 @@ class DynamicLossScaler(LossScalerBase):
             self.last_overflow_iter = self.cur_iter
         else:
             if self.consecutive_hysteresis:
-                hysteresis_msg = f"Consecutive hysteresis is enabled. Restoring hysteresis to {self.delayed_shift}"
-                logger.info(hysteresis_msg)
+                if dist.get_rank() == 0:
+                    hysteresis_msg = f"Consecutive hysteresis is enabled. Restoring hysteresis to {self.delayed_shift}"
+                    logger.info(hysteresis_msg)
                 self.cur_hysteresis = self.delayed_shift
             if (self.cur_iter - self.last_overflow_iter) % self.scale_window == 0:
                 if not self.consecutive_hysteresis:
