@@ -2669,6 +2669,8 @@ class DeepSpeedEngine(Module):
             deepspeed_states = ['module']
             if self.optimizer is not None:
                 self.optimizer.refresh_fp32_params()
+            if load_lr_scheduler_states and self.lr_scheduler is not None:
+                self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         else:
             if self.has_moe_layers:
                 largest_group_name = groups._get_max_expert_size_name()
@@ -3164,7 +3166,8 @@ class DeepSpeedEngine(Module):
         # if we don't use it, we get parameters ordered incorrectly
         if hasattr(self.optimizer, "round_robin_bit16_groups"):
             bit16_groups = self.optimizer.round_robin_bit16_groups
-        elif self.bfloat16_enabled() and not self.zero_optimization():
+        elif self.bfloat16_enabled() and (not self.zero_optimization() or self.zero_optimization_stage() == 1 
+            and hasattr(self.optimizer, 'bf16_groups')):
             bit16_groups = self.optimizer.bf16_groups
         else:
             bit16_groups = self.optimizer.bit16_groups if self.zero_optimization_stage(
