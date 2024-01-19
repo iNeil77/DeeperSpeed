@@ -426,10 +426,12 @@ class SlurmRunner(MultiNodeRunner):
         if getattr(self.args, 'comment', ''):
             srun_cmd += ['--comment', self.args.comment]
 
+        if getattr(self.args, 'account', ''):
+            srun_cmd += ['--account', self.args.account]
+
         if self.args.include != "":
             srun_cmd.append('--nodelist')
             srun_cmd.append(self._pdsh_include_to_nodelist(self.args.include)) 
-            srun_cmd += ['--comment', self.args.slurm_comment]
 
         if self.args.num_nodes > 0:
             srun_cmd.append('--nodes')
