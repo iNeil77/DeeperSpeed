@@ -41,16 +41,14 @@ def parse_args(args=None):
 
     parser.add_argument("--num_nodes",
                         type=int,
-                        default=-1,
-                        help="Total number of worker nodes to run on, this will use "
-                        "the top N hosts from the given hostfile.")
+                        default=1,
+                        help="Total number of worker nodes to run on")
 
     parser.add_argument("--num_gpus",
                         "--num_accelerators",
                         type=int,
                         default=-1,
-                        help="Max number of GPUs to use on each node, will use "
-                        "[0:N) GPU ids on each node.")
+                        help="Max number of GPUs to use on each node.")
 
     parser.add_argument("--master_port",
                         default=TORCH_DISTRIBUTED_DEFAULT_PORT,
