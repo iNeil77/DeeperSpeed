@@ -6,7 +6,7 @@
 from torch.distributed.elastic.agent.server.local_elastic_agent import LocalElasticAgent
 from typing import Any, Dict, Optional, Tuple
 from datetime import datetime
-from torch.distributed.elastic.agent.server.api import log, _get_socket_with_port
+from torch.distributed.elastic.agent.server.api import logger
 from torch.distributed.elastic.metrics import put_metric
 from torch.distributed.elastic.agent.server.api import (
     RunResult,
@@ -23,6 +23,38 @@ import shutil
 import copy
 from contextlib import closing
 import subprocess
+import socket
+
+
+def _get_socket_with_port() -> socket.socket:
+    """Return a free port on localhost.
+
+    The free port is "reserved" by binding a temporary socket on it.
+    Close the socket before passing the port to the entity that
+    requires it. Usage example::
+
+    sock = _get_socket_with_port()
+    with closing(sock):
+        port = sock.getsockname()[1]
+        sock.close()
+        # there is still a race-condition that some other process
+        # may grab this port before func() runs
+        func(port)
+    """
+    addrs = socket.getaddrinfo(
+        host="localhost", port=None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
+    )
+    for addr in addrs:
+        family, type, proto, _, _ = addr
+        s = socket.socket(family, type, proto)
+        try:
+            s.bind(("localhost", 0))
+            s.listen(0)
+            return s
+        except OSError as e:
+            s.close()
+            logger.info("Socket creation attempt failed.", exc_info=e)
+    raise RuntimeError("Failed to create a socket")
 
 
 class DSElasticAgent(LocalElasticAgent):
@@ -121,7 +153,7 @@ class DSElasticAgent(LocalElasticAgent):
         spec = self._worker_group.spec
         role = spec.role
 
-        log.info(f"[{role}] starting workers for entrypoint: {spec.get_entrypoint_name()}")
+        logger.info(f"[{role}] starting workers for entrypoint: {spec.get_entrypoint_name()}")
 
         self._initialize_workers(self._worker_group)
         monitor_interval = spec.monitor_interval
@@ -147,14 +179,14 @@ class DSElasticAgent(LocalElasticAgent):
             put_metric(f"workers.{role}.{state.name.lower()}", 1)
 
             if state == WorkerState.SUCCEEDED:
-                log.info(f"[{role}] worker group successfully finished."
+                logger.info(f"[{role}] worker group successfully finished."
                          f" Waiting {self._exit_barrier_timeout} seconds for other agents to finish.")
                 self._exit_barrier()
                 return run_result
             elif state in {WorkerState.UNHEALTHY, WorkerState.FAILED
                            } or len(participants) > len(rdzv_handler._state_holder.state.participants):
                 if self._remaining_restarts > 0:
-                    log.info(f"[{role}] Worker group {state.name}. "
+                    logger.info(f"[{role}] Worker group {state.name}. "
                              f"{self._remaining_restarts}/{spec.max_restarts} attempts left;"
                              f" will restart worker group")
                     self._remaining_restarts -= 1
@@ -172,7 +204,7 @@ class DSElasticAgent(LocalElasticAgent):
                 num_nodes_waiting = rdzv_handler.num_nodes_waiting()
                 group_rank = self._worker_group.group_rank
                 if num_nodes_waiting > 0:
-                    log.info(f"[{role}] Detected {num_nodes_waiting} "
+                    logger.info(f"[{role}] Detected {num_nodes_waiting} "
                              f"new nodes from group_rank={group_rank}; "
                              f"will restart worker group")
                     self._restart_workers(self._worker_group)
